@@ -1,5 +1,3 @@
-# Hello World Example
+# W5500测试
 
-Starts a FreeRTOS task to print "Hello World"
-
-See the README.md file in the upper level 'examples' directory for more information about examples.
+测试W5500通过SPI与ESP32通讯
