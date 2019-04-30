@@ -435,27 +435,26 @@ void http_send(void)
 
                 case SOCK_CLOSED:
                         printf("Closed\r\n");
-                        if ((socket(SOCK_DHCP, Sn_MR_TCP, socker_port, 0x00)) != SOCK_DHCP)
-                        {
-                                printf("OK\r\n");
-                                int32_t r = 0;
-                                r = recv(SOCK_DHCP, &recv_buf, sizeof(recv_buf));
-                                if (r > 0)
-                                {
-                                        printf("接收到%d字节   recvdate = %s\n ", r, recv_buf);
-                                }
-                                else
-                                {
-                                        printf("fail!!! code:%d\n", r);
-                                }
-                        }
-                        break;
-                default:
-                        break;
-                }
+                        socket(SOCK_DHCP, Sn_MR_TCP, socker_port++, 0x00);
 
-                vTaskDelay(500 / portTICK_RATE_MS);
+                        int32_t r = 0;
+                        r = recv(SOCK_DHCP, &recv_buf, sizeof(recv_buf));
+                        if (r > 0)
+                        {
+                                printf("接收到%d字节   recvdate = %s\n ", r, recv_buf);
+                        }
+                        else
+                        {
+                                printf("fail!!! code:%d\n", r);
+                        }
+                }
+                break;
+        default:
+                break;
         }
+
+        vTaskDelay(500 / portTICK_RATE_MS);
+}
 }
 
 /*******************有线网初始化*******************/
