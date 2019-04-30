@@ -29,6 +29,7 @@
 
 #include "w5500_spi.h"
 #include "dhcp.h"
+#include "dns.h"
 
 // extern OsiSyncObj_t Spi_Mutex;   //Used for SPI Lock
 // extern OsiSyncObj_t cJSON_Mutex; //Used for cJSON Lock
@@ -44,13 +45,15 @@
 #define SUCCESS 1
 #define RJ45_STATUS_TIMEOUT 3
 
-uint8_t LAN_HOST_NAME[16];
+uint32_t socker_port = 3000;
+uint8_t LAN_WEB_SERVER[16];
 uint8_t ethernet_buf[ETHERNET_DATA_BUF_SIZE];
 uint8_t dns_host_ip[4];
+uint8_t server_port = 80;
 uint8_t standby_dns[4] = {8, 8, 8, 8};
 wiz_NetInfo gWIZNETINFO;
 wiz_NetInfo gWIZNETINFO_READ;
-extern char HOST_NAME[64];
+extern char WEB_SERVER[64];
 extern char POST_REQUEST_URI[255];
 extern char Post_Data_Buffer[4096];
 extern volatile bool NET_DATA_POST;
@@ -72,6 +75,52 @@ static unsigned long lan_post_data_len = 0;
 static unsigned long lan_read_data_end_addr = 0;
 static unsigned long lan_MemoryAddr = 0;
 static char lan_mac_buf[18] = {0};
+uint8_t Http_Buffer;
+
+struct HTTP_STA
+{
+        char GET[10];
+        char POST[10];
+        char HEART_BEAT[64];
+
+        char POST_URL1[64];
+        char POST_URL_METADATA[16];
+        char POST_URL_FIRMWARE[16];
+        char POST_URL_SSID[16];
+        char POST_URL_COMMAND_ID[16];
+
+        char WEB_URL1[50];
+        char WEB_URL2[20];
+        char WEB_URL3[20];
+
+        char HTTP_VERSION10[20];
+        char HTTP_VERSION11[20];
+
+        char HOST[30];
+        char USER_AHENT[40];
+        char CONTENT_LENGTH[30];
+        char ENTER[10];
+} http = {"GET ",
+          "POST ",
+          "http://api.ubibot.cn/heartbeat?api_key=",
+
+          "http://api.ubibot.cn/update.json?api_key=",
+          "&metadata=true",
+          "&firmware=",
+          "&ssid=",
+          "&command_id=",
+
+          "http://api.ubibot.cn/products/",
+          "/devices/",
+          "/activate",
+
+          " HTTP/1.0\r\n",
+          " HTTP/1.1\r\n",
+
+          "Host: api.ubibot.cn\r\n",
+          "User-Agent: dalian urban ILS1\r\n",
+          "Content-Length:",
+          "\r\n\r\n"};
 
 /*******************************************************************************
 // Reset w5500 chip with w5500 RST pin                                
@@ -122,88 +171,6 @@ void spi_cs_deselect(void)
         // gpio_set_level(PIN_NUM_CS, 1);
 }
 
-// /*******************************************************************************
-// // callback function to read byte using SPI
-// *******************************************************************************/
-// uint8_t spi_readbyte(void)
-// {
-//         return SPI_SendReciveByte(0x00);
-// }
-
-// /*******************************************************************************
-// // callback function to write byte using SPI
-// *******************************************************************************/
-// void spi_writebyte(uint8_t writebyte)
-// {
-//         SPI_SendReciveByte(writebyte);
-// }
-
-// /*******************************************************************************
-// // callback function to burst read using SPI
-// *******************************************************************************/
-// void spi_readburst(uint8_t *read_buf, uint16_t buf_len)
-// {
-//         uint16_t i;
-
-//         for (i = 0; i < buf_len; i++)
-//         {
-//                 read_buf[i] = spi_readbyte();
-//         }
-// }
-
-// /*******************************************************************************
-// // callback function to burst write using SPI
-// *******************************************************************************/
-// void spi_writeburst(uint8_t *write_buf, uint16_t buf_len)
-// {
-//         uint16_t i;
-
-//         for (i = 0; i < buf_len; i++)
-//         {
-//                 spi_writebyte(write_buf[i]);
-//         }
-// }
-
-// void spi_write_data(uint16_t reg_addr, uint8_t ctrl_cmd, uint8_t *write_buf, uint16_t buf_len)
-// {
-//         uint16_t i;
-
-//         SET_SPI2_CS_OFF(); //w5500 spi cs enable
-
-//         SPI_SendReciveByte((uint8_t)((reg_addr) >> 8));
-
-//         SPI_SendReciveByte((uint8_t)(reg_addr)); //16bit address last 8 bit address
-
-//         SPI_SendReciveByte(ctrl_cmd);
-
-//         for (i = 0; i < buf_len; i++)
-//         {
-//                 SPI_SendReciveByte(write_buf[i]);
-//         }
-
-//         SET_SPI2_CS_ON(); //w5500 spi cs disable
-// }
-
-// void spi_read_data(uint16_t reg_addr, uint8_t ctrl_cmd, uint8_t *read_buf, uint16_t buf_len)
-// {
-//         uint16_t i;
-
-//         SET_SPI2_CS_OFF(); //w5500 spi cs enable
-
-//         SPI_SendReciveByte((uint8_t)((reg_addr) >> 8));
-
-//         SPI_SendReciveByte((uint8_t)(reg_addr)); //16bit address last 8 bit address
-
-//         SPI_SendReciveByte(ctrl_cmd);
-
-//         for (i = 0; i < buf_len; i++)
-//         {
-//                 read_buf[i] = SPI_SendReciveByte(0x00);
-//         }
-
-//         SET_SPI2_CS_ON(); //w5500 spi cs disable
-// }
-
 /*******************************************************************************
 // init w5500 driver lib                               
 *******************************************************************************/
@@ -212,7 +179,7 @@ void w5500_lib_init(void)
         // /* Critical section callback */
         reg_wizchip_cris_cbfunc(spi_cris_en, spi_cris_ex);
 
-        /* Chip selection call back  不可�? */
+        /* Chip selection call back  */
         reg_wizchip_cs_cbfunc(spi_cs_select, spi_cs_deselect);
 
         /* SPI Read & Write callback function */
@@ -288,6 +255,37 @@ void my_ip_conflict(void)
         printf("DHCP IP 冲突\n");
 }
 
+/****************解析DNS*****************/
+uint8_t lan_dns_resolve(uint8_t *dns_buf)
+{
+        //   osi_at24c08_ReadData(HOST_ADDR,(uint8_t*)WEB_SERVER,sizeof(WEB_SERVER),1);  //read the host name
+
+        DNS_init(SOCK_DHCP, dns_buf);
+
+        if (DNS_run(gWIZNETINFO.dns, (uint8_t *)HOST_NAME, dns_host_ip) > 0)
+        {
+#ifdef RJ45_DEBUG
+                printf("host ip: %d.%d.%d.%d\r\n", dns_host_ip[0], dns_host_ip[1], dns_host_ip[2], dns_host_ip[3]);
+#endif
+
+                return SUCCESS;
+        }
+        else if (DNS_run(standby_dns, (uint8_t *)HOST_NAME, dns_host_ip) > 0)
+        {
+#ifdef RJ45_DEBUG
+                printf("s_host ip: %d.%d.%d.%d\r\n", dns_host_ip[0], dns_host_ip[1], dns_host_ip[2], dns_host_ip[3]);
+#endif
+
+                return SUCCESS;
+        }
+
+#ifdef RJ45_DEBUG
+        printf("n_host ip: %d.%d.%d.%d\r\n", dns_host_ip[0], dns_host_ip[1], dns_host_ip[2], dns_host_ip[3]);
+#endif
+
+        return FAILURE;
+}
+
 /*******************************************************************************
 // w5500 init network                              
 *******************************************************************************/
@@ -298,24 +296,14 @@ void W5500_Network_Init(void)
         uint8_t ip[4] = {192, 168, 1, 123};                    //< Source IP Address
         uint8_t sn[4] = {255, 255, 255, 0};                    //< Subnet Mask
         uint8_t gw[4] = {192, 168, 1, 1};                      //< Gateway IP Address
-        uint8_t dns[4] = {6, 6, 6, 6};                         //< DNS server IP Address
+        uint8_t dns[4] = {114, 114, 114, 114};                 //< DNS server IP Address
 
         uint8_t txsize[MAX_SOCK_NUM] = {4, 2, 2, 2, 2, 2, 2, 0}; //socket 0,16K
         uint8_t rxsize[MAX_SOCK_NUM] = {4, 2, 2, 2, 2, 2, 2, 0}; //socket 0,16K
 
+        esp_read_mac(&mac, 3); //      获取芯片内部默认出厂MAC，
+
         wizchip_init(txsize, rxsize);
-
-        //osi_at24c08_ReadData(MAC_ADDR, (uint8_t *)mac, sizeof(mac), 1); //Read mac
-
-        //dhcp_mode = osi_at24c08_read_byte(DHCP_MODE_ADDR);
-
-        //osi_at24c08_ReadData(STATIC_IP_ADDR, ip, sizeof(ip), 1);
-
-        //osi_at24c08_ReadData(STATIC_SN_ADDR, sn, sizeof(sn), 1);
-
-        //osi_at24c08_ReadData(STATIC_GW_ADDR, gw, sizeof(gw), 1);
-
-        //osi_at24c08_ReadData(STATIC_DNS_ADDR, dns, sizeof(dns), 1);
 
         memcpy(gWIZNETINFO.mac, mac, 6);
         memcpy(gWIZNETINFO.ip, ip, 4);
@@ -409,6 +397,68 @@ void W5500_Network_Init(void)
         printf("Network_init success!!!\n");
 }
 
+/*****************http发送****************/
+void http_send(void)
+{
+
+        char build_http[256];
+        char recv_buf[1024];
+        sprintf(build_http, "%s%s%s%s%s%s%s", http.GET, http.WEB_URL1, "dc6719fd1120443a9e13916aaef07ef5", http.WEB_URL2, "SP10001", http.WEB_URL3, http.ENTER);
+        //http.HTTP_VERSION10, http.HOST, http.USER_AHENT, http.ENTER);
+
+        printf("build_http=%s\n", build_http);
+
+        while (1)
+        {
+                switch (getSn_SR(SOCK_DHCP))
+                {
+                case SOCK_INIT:
+                        printf("SOCK_INIT!!!\n");
+                        int8_t ret = connect(SOCK_DHCP, dns_host_ip, server_port);
+                        printf("%d\n", ret);
+                        break;
+                case SOCK_ESTABLISHED:
+                        if (getSn_IR(SOCK_DHCP) & Sn_IR_CON)
+                        {
+                                setSn_IR(SOCK_DHCP, Sn_IR_CON);
+                        }
+                        // Http_Buffer = "http://api.ubibot.cn/products/产品号/devices/序列号/activate";
+                        printf("SOCK_ESTABLISHED!!!\n");
+                        send(SOCK_DHCP, (const uint8_t *)build_http, sizeof(build_http));
+                        vTaskDelay(500 / portTICK_RATE_MS);
+                        close(SOCK_DHCP);
+                        break;
+
+                case SOCK_CLOSE_WAIT:
+                        printf("SOCK_CLOSE_WAIT!!!\n");
+                        break;
+
+                case SOCK_CLOSED:
+                        printf("Closed\r\n");
+                        if ((socket(SOCK_DHCP, Sn_MR_TCP, socker_port, 0x00)) != SOCK_DHCP)
+                        {
+                                printf("OK\r\n");
+                                int32_t r = 0;
+                                r = recv(SOCK_DHCP, &recv_buf, sizeof(recv_buf));
+                                if (r > 0)
+                                {
+                                        printf("接收到%d字节   recvdate = %s\n ", r, recv_buf);
+                                }
+                                else
+                                {
+                                        printf("fail!!! code:%d\n", r);
+                                }
+                        }
+                        break;
+                default:
+                        break;
+                }
+
+                vTaskDelay(500 / portTICK_RATE_MS);
+        }
+}
+
+/*******************有线网初始化*******************/
 void w5500_user_int(void)
 {
         gpio_config_t io_conf;
@@ -432,15 +482,19 @@ void w5500_user_int(void)
         w5500_lib_init();
 
         // printf(" VERSIONR_ID: %02x\n", IINCHIP_READ(VERSIONR));
-
-        W5500_Network_Init();
         esp_err_t ret;
         ret = check_rj45_status();
         if (ret == ESP_OK)
         {
+                W5500_Network_Init();
+                ret = lan_dns_resolve(ethernet_buf);
+                if (ret == SUCCESS)
+                {
+                        printf("DNS_SUCCESS!!!\n");
+                        http_send();
+                        // xTaskCreate(http_send, "http_send", 8192, NULL, 2, NULL);
+                }
         }
-
-        //xTaskCreate(do_tcp_server, "do_tcp_server", 8192, NULL, 2, NULL);
 }
 
 /*******************************************************************************

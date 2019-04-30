@@ -49,7 +49,7 @@ spi_device_interface_config_t devcfg = {
     .command_bits = 0,
     .address_bits = 0,
     .dummy_bits = 0,
-    .clock_speed_hz = 2500000,
+    .clock_speed_hz = 2.5 * 1000 * 1000,
     .duty_cycle_pos = 128, //50% duty cycle
     .mode = 0,
     .spics_io_num = -1, //PIN_NUM_CS,           //W5500需要自己调用该引脚的开关
@@ -77,7 +77,6 @@ void spi_init(void)
         gpio_config(&io_conf);
         gpio_set_level(PIN_NUM_CS, 1);
 
-        
         /**************安装SPI设备*************/
         esp_err_t ret;
         //Initialize the SPI bus

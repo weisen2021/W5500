@@ -19,37 +19,38 @@
 
 #include "w5500_spi.h"
 #include "w5500_driver.h"
+#include "Led.h"
 
 void app_main()
 {
-       printf("Hello world!\n");
+        printf("Hello world!\n");
 
-       /* Print chip information */
-       esp_chip_info_t chip_info;
-       esp_chip_info(&chip_info);
-       printf("This is ESP32 chip with %d CPU cores, WiFi%s%s, ",
-              chip_info.cores,
-              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
-              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+        /* Print chip information */
+        esp_chip_info_t chip_info;
+        esp_chip_info(&chip_info);
+        printf("This is ESP32 chip with %d CPU cores, WiFi%s%s, ",
+               chip_info.cores,
+               (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+               (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
 
-       printf("silicon revision %d, ", chip_info.revision);
+        printf("silicon revision %d, ", chip_info.revision);
 
-       printf("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
-              (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+        printf("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
+               (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
-       for (uint8_t j = 0; j < 4; j++)
-       {
-              uint8_t MAC_EFUSE[6];
-              esp_read_mac(&MAC_EFUSE, j);
-              printf("MAC1:");
-              for (uint8_t i = 0; i < 6; i++)
-              {
-                     printf(" %01x ", MAC_EFUSE[i]);
-              }
-              printf("  \n");
-       }
-
-       spi_init();
-       // spi_test();
-       w5500_user_int();
+        for (uint8_t j = 0; j < 4; j++)
+        {
+                uint8_t MAC_EFUSE[6];
+                esp_read_mac(&MAC_EFUSE, j);
+                printf("MAC1:");
+                for (uint8_t i = 0; i < 6; i++)
+                {
+                        printf(" %01x ", MAC_EFUSE[i]);
+                }
+                printf("  \n");
+        }
+        Led_Init();
+        spi_init();
+        // spi_test();
+        w5500_user_int();
 }
