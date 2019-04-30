@@ -28,6 +28,7 @@
 #include "socket.h"
 
 #include "w5500_spi.h"
+#include "dhcp.h"
 
 // extern OsiSyncObj_t Spi_Mutex;   //Used for SPI Lock
 // extern OsiSyncObj_t cJSON_Mutex; //Used for cJSON Lock
@@ -41,7 +42,7 @@
 #define RJ45_DEBUG 1
 #define FAILURE 0
 #define SUCCESS 1
-#define RJ45_STATUS_TIMEOUT 5
+#define RJ45_STATUS_TIMEOUT 3
 
 uint8_t LAN_HOST_NAME[16];
 uint8_t ethernet_buf[ETHERNET_DATA_BUF_SIZE];
@@ -237,59 +238,54 @@ void w5500_lib_init(void)
 /*******************************************************************************
 // check RJ45 connected                              
 *******************************************************************************/
-esp_err_t check_rj45_status(void)
+uint8_t check_rj45_status(void)
 {
-        //uint8_t i;
+        uint8_t i;
 
-        // for (i = 0; i < RJ45_STATUS_TIMEOUT; i++)
-        // {
-        if (IINCHIP_READ(PHYCFGR) & 0x01)
+        for (i = 0; i < RJ45_STATUS_TIMEOUT; i++)
         {
-                printf("RJ45 OK\n");
-                return ESP_OK;
-        }
-        // vTaskDelay(100 / portTICK_RATE_MS);
-        //printf("RJ45 FAIL\n ");
-
-        //osi_Sleep(100); //delay 0.1s
-        // }
-        else
-        {
+                if (IINCHIP_READ(PHYCFGR) & 0x01)
+                {
+                        printf("RJ45 OK\n");
+                        return ESP_OK;
+                }
                 printf("RJ45 FAIL\n ");
-                return ESP_FAIL;
+                vTaskDelay(500 / portTICK_RATE_MS);
         }
+
+        printf("RJ45 FAIL\n ");
+        return ESP_FAIL;
 }
 
-/**
-*@brief		检RJ45连接
-*@param		ÎÞ
-*@return	ÎÞ
-*/
-// uint8_t getPHYStatus(void)
-// {
-//         return IINCHIP_READ(PHYCFGR);
-// }
-
-void PHY_check(void)
+/****************DHCP IP更新回调函数*****************/
+void my_ip_assign(void)
 {
-        uint8_t PHY_connect = 0;
-        PHY_connect = 0x01 & IINCHIP_READ(PHYCFGR);
-        if (PHY_connect == 0)
-        {
-                printf(" \r\n cheak net!\r\n");
+        getIPfromDHCP(gWIZNETINFO.ip);
 
-                // while (PHY_connect == 0)
-                // {
-                //         PHY_connect = 0x01 & getPHYStatus();
-                //         printf(" .");
-                //         vTaskDelay(10 / portTICK_RATE_MS);
-                // }
-                // printf(" \r\n");
-        }
-        else
-        {
-                printf("success!!!\n");
-        }
+        getGWfromDHCP(gWIZNETINFO.gw);
+
+        getSNfromDHCP(gWIZNETINFO.sn);
+
+        getDNSfromDHCP(gWIZNETINFO.dns);
+
+        gWIZNETINFO.dhcp = NETINFO_DHCP; //NETINFO_STATIC; //< 1 - Static, 2 - DHCP
+
+        ctlnetwork(CN_SET_NETINFO, (void *)&gWIZNETINFO);
+
+#ifdef RJ45_DEBUG
+        ctlnetwork(CN_GET_NETINFO, (void *)&gWIZNETINFO);
+        printf("MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", gWIZNETINFO.mac[0], gWIZNETINFO.mac[1], gWIZNETINFO.mac[2], gWIZNETINFO.mac[3], gWIZNETINFO.mac[4], gWIZNETINFO.mac[5]);
+        printf("SIP: %d.%d.%d.%d\r\n", gWIZNETINFO.ip[0], gWIZNETINFO.ip[1], gWIZNETINFO.ip[2], gWIZNETINFO.ip[3]);
+        printf("GAR: %d.%d.%d.%d\r\n", gWIZNETINFO.gw[0], gWIZNETINFO.gw[1], gWIZNETINFO.gw[2], gWIZNETINFO.gw[3]);
+        printf("SUB: %d.%d.%d.%d\r\n", gWIZNETINFO.sn[0], gWIZNETINFO.sn[1], gWIZNETINFO.sn[2], gWIZNETINFO.sn[3]);
+        printf("DNS: %d.%d.%d.%d\r\n", gWIZNETINFO.dns[0], gWIZNETINFO.dns[1], gWIZNETINFO.dns[2], gWIZNETINFO.dns[3]);
+#endif
+}
+
+/****************DHCP IP冲突函数*****************/
+void my_ip_conflict(void)
+{
+        printf("DHCP IP 冲突\n");
 }
 
 /*******************************************************************************
@@ -298,7 +294,7 @@ void PHY_check(void)
 void W5500_Network_Init(void)
 {
         uint8_t mac[6] = {0x06, 0x08, 0xdc, 0x00, 0xab, 0xcd}; //< Source Mac Address
-        uint8_t dhcp_mode = 0;                                 //0:static ;1:dhcp
+        uint8_t dhcp_mode = 1;                                 //0:static ;1:dhcp
         uint8_t ip[4] = {192, 168, 1, 123};                    //< Source IP Address
         uint8_t sn[4] = {255, 255, 255, 0};                    //< Subnet Mask
         uint8_t gw[4] = {192, 168, 1, 1};                      //< Gateway IP Address
@@ -352,32 +348,66 @@ void W5500_Network_Init(void)
         E_NetTimeout.time_100us = 1000; //< time unit 100us
         wizchip_settimeout(&E_NetTimeout);
 
+        if (gWIZNETINFO.dhcp == NETINFO_DHCP)
+        {
+                Ethernet_Timeout = 0;
+                uint8_t dhcp_retry = 0;
+
+                reg_dhcp_cbfunc(my_ip_assign, my_ip_assign, my_ip_conflict);
+
+                DHCP_init(SOCK_DHCP, ethernet_buf);
+
+                while (DHCP_run() != DHCP_IP_LEASED)
+                {
+                        switch (DHCP_run())
+                        {
+                        case DHCP_IP_ASSIGN:
+#ifdef RJ45_DEBUG
+                                printf("DHCP_IP_ASSIGN.\r\n");
+#endif
+                        case DHCP_IP_CHANGED: /* If this block empty, act with default_ip_assign & default_ip_update */
+                                              //
+                                              // Add to ...
+                                              //
+#ifdef RJ45_DEBUG
+                                printf("DHCP_IP_CHANGED.\r\n");
+#endif
+                                break;
+
+                        case DHCP_IP_LEASED:
+                                //
+                                // TO DO YOUR NETWORK APPs.
+                                //
+#ifdef RJ45_DEBUG
+                                printf("DHCP_IP_LEASED.\r\n");
+
+                                printf("DHCP LEASED TIME : %d Sec\r\n", getDHCPLeasetime());
+#endif
+                                break;
+
+                        case DHCP_FAILED:
+#ifdef RJ45_DEBUG
+                                printf("DHCP_FAILED.\r\n");
+#endif
+
+                                if (dhcp_retry++ > RETRY_TIME_OUT)
+                                {
+                                        DHCP_stop(); // if restart, recall DHCP_init()
+                                }
+                                break;
+
+                        default:
+                                break;
+                        }
+
+                        // if (Ethernet_Timeout >= ETHERNET_HTTP_TIMEOUT)
+                        // {
+                        //         break;
+                        // }
+                }
+        }
         printf("Network_init success!!!\n");
 }
-
-// void my_ip_assign(void)
-// {
-//         getIPfromDHCP(gWIZNETINFO.ip);
-
-//         getGWfromDHCP(gWIZNETINFO.gw);
-
-//         getSNfromDHCP(gWIZNETINFO.sn);
-
-//         getDNSfromDHCP(gWIZNETINFO.dns);
-
-//         gWIZNETINFO.dhcp = NETINFO_DHCP; //NETINFO_STATIC; //< 1 - Static, 2 - DHCP
-
-//         ctlnetwork(CN_SET_NETINFO, (void *)&gWIZNETINFO);
-
-// #ifdef RJ45_DEBUG
-//         ctlnetwork(CN_GET_NETINFO, (void *)&gWIZNETINFO);
-//         printf("MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", gWIZNETINFO.mac[0], gWIZNETINFO.mac[1], gWIZNETINFO.mac[2], gWIZNETINFO.mac[3], gWIZNETINFO.mac[4], gWIZNETINFO.mac[5]);
-//         printf("SIP: %d.%d.%d.%d\r\n", gWIZNETINFO.ip[0], gWIZNETINFO.ip[1], gWIZNETINFO.ip[2], gWIZNETINFO.ip[3]);
-//         printf("GAR: %d.%d.%d.%d\r\n", gWIZNETINFO.gw[0], gWIZNETINFO.gw[1], gWIZNETINFO.gw[2], gWIZNETINFO.gw[3]);
-//         printf("SUB: %d.%d.%d.%d\r\n", gWIZNETINFO.sn[0], gWIZNETINFO.sn[1], gWIZNETINFO.sn[2], gWIZNETINFO.sn[3]);
-//         printf("DNS: %d.%d.%d.%d\r\n", gWIZNETINFO.dns[0], gWIZNETINFO.dns[1], gWIZNETINFO.dns[2], gWIZNETINFO.dns[3]);
-// #endif
-// }
 
 void w5500_user_int(void)
 {
@@ -403,12 +433,12 @@ void w5500_user_int(void)
 
         // printf(" VERSIONR_ID: %02x\n", IINCHIP_READ(VERSIONR));
 
-        // W5500_Network_Init();
-
-        // esp_err_t ret;
-        // ret = check_rj45_status();
-        // ESP_ERROR_CHECK(ret);
-        PHY_check();
+        W5500_Network_Init();
+        esp_err_t ret;
+        ret = check_rj45_status();
+        if (ret == ESP_OK)
+        {
+        }
 
         //xTaskCreate(do_tcp_server, "do_tcp_server", 8192, NULL, 2, NULL);
 }
