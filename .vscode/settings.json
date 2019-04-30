@@ -1,3 +1,10 @@
 {
-        "C_Cpp.errorSquiggles": "Disabled"
+        "C_Cpp.errorSquiggles": "Disabled",
+        "files.associations": {
+                "spi_master.h": "c",
+                "gpio_struct.h": "c",
+                "w5500_driver.h": "c",
+                "w5500_spi.h": "c",
+                "errno.h": "c"
+        }
 }
