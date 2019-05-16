@@ -1,6 +1,6 @@
 //*****************************************************************************
 //
-//! \file socket.c
+//! \file lan_socket.c
 //! \brief SOCKET APIs Implements file.
 //! \details SOCKET APIs like as Berkeley Socket APIs.
 //! \version 1.0.3
@@ -13,13 +13,13 @@
 //!       <2014/05/01> V1.0.3. Refer to M20140501
 //!         1. Implicit type casting -> Explicit type casting.
 //!         2. replace 0x01 with PACK_REMAINED in recvfrom()
-//!         3. Validation a destination ip in connect() & sendto():
+//!         3. Validation a destination ip in lan_connect() & lan_sendto():
 //!            It occurs a fatal error on converting unint32 address if uint8* addr parameter is not aligned by 4byte address.
 //!            Copy 4 byte addr value into temporary uint32 variable and then compares it.
 //!       <2013/12/20> V1.0.2 Refer to M20131220
 //!                    Remove Warning.
 //!       <2013/11/04> V1.0.1 2nd Release. Refer to "20131104".
-//!                    In sendto(), Add to clear timeout interrupt status (Sn_IR_TIMEOUT)
+//!                    In lan_sendto(), Add to clear timeout interrupt status (Sn_IR_TIMEOUT)
 //!       <2013/10/21> 1st Release
 //! \author MidnightCow
 //! \copyright
@@ -53,9 +53,7 @@
 //! THE POSSIBILITY OF SUCH DAMAGE.
 //
 //*****************************************************************************
-#include "socket.h"
-#include "Led.h"
-#include "freertos/task.h"
+#include "w5500_socket.h"
 
 //M20150401 : Typing Error
 //#define SOCK_ANY_PORT_NUM  0xC000;
@@ -118,7 +116,7 @@ uint8_t sock_remained_byte[_WIZCHIP_SOCK_NUM_] = {
                         return SOCKERR_DATALEN; \
         } while (0);
 
-int8_t socket(uint8_t sn, uint8_t protocol, uint16_t port, uint8_t flag)
+int8_t lan_socket(uint8_t sn, uint8_t protocol, uint16_t port, uint8_t flag)
 {
         CHECK_SOCKNUM();
         switch (protocol)
@@ -188,7 +186,7 @@ int8_t socket(uint8_t sn, uint8_t protocol, uint16_t port, uint8_t flag)
                         break;
                 }
         }
-        close(sn);
+        lan_close(sn);
 //M20150601
 #if _WIZCHIP_ == 5300
         setSn_MR(sn, ((uint16_t)(protocol | (flag & 0xF0))) | (((uint16_t)(flag & 0x02)) << 7));
@@ -220,12 +218,12 @@ int8_t socket(uint8_t sn, uint8_t protocol, uint16_t port, uint8_t flag)
         return (int8_t)sn;
 }
 
-int8_t close(uint8_t sn)
+int8_t lan_close(uint8_t sn)
 {
         CHECK_SOCKNUM();
 //A20160426 : Applied the erratum 1 of W5300
 #if (_WIZCHIP_ == 5300)
-        //M20160503 : Wrong socket parameter. s -> sn
+        //M20160503 : Wrong lan_socket parameter. s -> sn
         //if( ((getSn_MR(s)& 0x0F) == Sn_MR_TCP) && (getSn_TX_FSR(s) != getSn_TxMAX(s)) )
         if (((getSn_MR(sn) & 0x0F) == Sn_MR_TCP) && (getSn_TX_FSR(sn) != getSn_TxMAX(sn)))
         {
@@ -233,13 +231,13 @@ int8_t close(uint8_t sn)
                 // TODO
                 // You can wait for completing to sending data;
                 // wait about 1 second;
-                // if you have completed to send data, skip the code of erratum 1
+                // if you have completed to lan_send data, skip the code of erratum 1
                 // ex> wait_1s();
                 //     if (getSn_TX_FSR(s) == getSn_TxMAX(s)) continue;
                 //
-                //M20160503 : The socket() of close() calls close() itself again. It occures a infinite loop - close()->socket()->close()->socket()-> ~
-                //socket(s,Sn_MR_UDP,0x3000,0);
-                //sendto(s,destip,1,destip,0x3000); // send the dummy data to an unknown destination(0.0.0.1).
+                //M20160503 : The lan_socket() of lan_close() calls lan_close() itself again. It occures a infinite loop - lan_close()->lan_socket()->lan_close()->lan_socket()-> ~
+                //lan_socket(s,Sn_MR_UDP,0x3000,0);
+                //lan_sendto(s,destip,1,destip,0x3000); // lan_send the dummy data to an unknown destination(0.0.0.1).
                 setSn_MR(sn, Sn_MR_UDP);
                 setSn_PORTR(sn, 0x3000);
                 setSn_CR(sn, Sn_CR_OPEN);
@@ -247,16 +245,16 @@ int8_t close(uint8_t sn)
                         ;
                 while (getSn_SR(sn) != SOCK_UDP)
                         ;
-                sendto(sn, destip, 1, destip, 0x3000); // send the dummy data to an unknown destination(0.0.0.1).
+                lan_sendto(sn, destip, 1, destip, 0x3000); // lan_send the dummy data to an unknown destination(0.0.0.1).
         };
 #endif
         setSn_CR(sn, Sn_CR_CLOSE);
         /* wait to process the command... */
         while (getSn_CR(sn))
                 ;
-        /* clear all interrupt of the socket. */
+        /* clear all interrupt of the lan_socket. */
         setSn_IR(sn, 0xFF);
-        //A20150401 : Release the sock_io_mode of socket n.
+        //A20150401 : Release the sock_io_mode of lan_socket n.
         sock_io_mode &= ~(1 << sn);
         //
         sock_is_sending &= ~(1 << sn);
@@ -267,43 +265,39 @@ int8_t close(uint8_t sn)
         return SOCK_OK;
 }
 
-int8_t listen(uint8_t sn)
+int8_t lan_listen(uint8_t sn)
 {
         CHECK_SOCKNUM();
         CHECK_SOCKMODE(Sn_MR_TCP);
         CHECK_SOCKINIT();
-
         setSn_CR(sn, Sn_CR_LISTEN);
         while (getSn_CR(sn))
                 ;
         while (getSn_SR(sn) != SOCK_LISTEN)
         {
-                close(sn);
+                lan_close(sn);
                 return SOCKERR_SOCKCLOSED;
         }
         return SOCK_OK;
 }
 
-int8_t connect(uint8_t sn, uint8_t *addr, uint16_t port)
+int8_t lan_connect(uint8_t sn, uint8_t *addr, uint16_t port)
 {
         CHECK_SOCKNUM();
         CHECK_SOCKMODE(Sn_MR_TCP);
         CHECK_SOCKINIT();
-        gpio_set_level(GPIO_LED_R, 0);
-
         //M20140501 : For avoiding fatal error on memory align mismatched
         //if( *((uint32_t*)addr) == 0xFFFFFFFF || *((uint32_t*)addr) == 0) return SOCKERR_IPINVALID;
-
-        uint32_t taddr;
-        taddr = ((uint32_t)addr[0] & 0x000000FF);
-        taddr = (taddr << 8) + ((uint32_t)addr[1] & 0x000000FF);
-        taddr = (taddr << 8) + ((uint32_t)addr[2] & 0x000000FF);
-        taddr = (taddr << 8) + ((uint32_t)addr[3] & 0x000000FF);
-        if (taddr == 0xFFFFFFFF || taddr == 0)
-                return SOCKERR_IPINVALID;
-
+        {
+                uint32_t taddr;
+                taddr = ((uint32_t)addr[0] & 0x000000FF);
+                taddr = (taddr << 8) + ((uint32_t)addr[1] & 0x000000FF);
+                taddr = (taddr << 8) + ((uint32_t)addr[2] & 0x000000FF);
+                taddr = (taddr << 8) + ((uint32_t)addr[3] & 0x000000FF);
+                if (taddr == 0xFFFFFFFF || taddr == 0)
+                        return SOCKERR_IPINVALID;
+        }
         //
-        gpio_set_level(GPIO_LED_G, 0);
 
         if (port == 0)
                 return SOCKERR_PORTZERO;
@@ -312,12 +306,10 @@ int8_t connect(uint8_t sn, uint8_t *addr, uint16_t port)
         setSn_CR(sn, Sn_CR_CONNECT);
         while (getSn_CR(sn))
                 ;
-
         if (sock_io_mode & (1 << sn))
                 return SOCK_BUSY;
         while (getSn_SR(sn) != SOCK_ESTABLISHED)
         {
-
                 if (getSn_IR(sn) & Sn_IR_TIMEOUT)
                 {
                         setSn_IR(sn, Sn_IR_TIMEOUT);
@@ -328,18 +320,12 @@ int8_t connect(uint8_t sn, uint8_t *addr, uint16_t port)
                 {
                         return SOCKERR_SOCKCLOSED;
                 }
-
-                gpio_set_level(GPIO_LED_B, 0);
-                vTaskDelay(500 / portTICK_RATE_MS);
-                gpio_set_level(GPIO_LED_B, 1);
-                vTaskDelay(500 / portTICK_RATE_MS);
         }
-        Led_Off();
 
         return SOCK_OK;
 }
 
-int8_t disconnect(uint8_t sn)
+int8_t lan_disconnect(uint8_t sn)
 {
         CHECK_SOCKNUM();
         CHECK_SOCKMODE(Sn_MR_TCP);
@@ -354,14 +340,14 @@ int8_t disconnect(uint8_t sn)
         {
                 if (getSn_IR(sn) & Sn_IR_TIMEOUT)
                 {
-                        close(sn);
+                        lan_close(sn);
                         return SOCKERR_TIMEOUT;
                 }
         }
         return SOCK_OK;
 }
 
-int32_t send(uint8_t sn, uint8_t *buf, uint16_t len)
+int32_t lan_send(uint8_t sn, uint8_t *buf, uint16_t len)
 {
         uint8_t tmp = 0;
         uint16_t freesize = 0;
@@ -393,7 +379,7 @@ int32_t send(uint8_t sn, uint8_t *buf, uint16_t len)
                 }
                 else if (tmp & Sn_IR_TIMEOUT)
                 {
-                        close(sn);
+                        lan_close(sn);
                         return SOCKERR_TIMEOUT;
                 }
                 else
@@ -408,7 +394,7 @@ int32_t send(uint8_t sn, uint8_t *buf, uint16_t len)
                 tmp = getSn_SR(sn);
                 if ((tmp != SOCK_ESTABLISHED) && (tmp != SOCK_CLOSE_WAIT))
                 {
-                        close(sn);
+                        lan_close(sn);
                         return SOCKERR_SOCKSTATUS;
                 }
                 if ((sock_io_mode & (1 << sn)) && (len > freesize))
@@ -435,7 +421,7 @@ int32_t send(uint8_t sn, uint8_t *buf, uint16_t len)
         return (int32_t)len;
 }
 
-int32_t recv(uint8_t sn, uint8_t *buf, uint16_t len)
+int32_t lan_recv(uint8_t sn, uint8_t *buf, uint16_t len)
 {
         uint8_t tmp = 0;
         uint16_t recvsize = 0;
@@ -472,13 +458,13 @@ int32_t recv(uint8_t sn, uint8_t *buf, uint16_t len)
                                                 break;
                                         else if (getSn_TX_FSR(sn) == getSn_TxMAX(sn))
                                         {
-                                                close(sn);
+                                                lan_close(sn);
                                                 return SOCKERR_SOCKSTATUS;
                                         }
                                 }
                                 else
                                 {
-                                        close(sn);
+                                        lan_close(sn);
                                         return SOCKERR_SOCKSTATUS;
                                 }
                         }
@@ -551,7 +537,7 @@ int32_t recv(uint8_t sn, uint8_t *buf, uint16_t len)
         return (int32_t)len;
 }
 
-int32_t sendto(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t port)
+int32_t lan_sendto(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t port)
 {
         uint8_t tmp = 0;
         uint16_t freesize = 0;
@@ -664,7 +650,7 @@ int32_t sendto(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t p
         return (int32_t)len;
 }
 
-int32_t recvfrom(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t *port)
+int32_t lan_recvfrom(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t *port)
 {
 //M20150601 : For W5300
 #if _WIZCHIP_ == 5300
@@ -790,7 +776,7 @@ int32_t recvfrom(uint8_t sn, uint8_t *buf, uint16_t len, uint8_t *addr, uint16_t
 #endif
                         if (sock_remained_size[sn] > 1514)
                         {
-                                close(sn);
+                                lan_close(sn);
                                 return SOCKFATAL_PACKLEN;
                         }
                         sock_pack_info[sn] = PACK_FIRST;
@@ -911,7 +897,7 @@ int8_t ctlsocket(uint8_t sn, ctlsock_type cstype, void *arg)
         return SOCK_OK;
 }
 
-int8_t setsockopt(uint8_t sn, sockopt_type sotype, void *arg)
+int8_t lna_setsockopt(uint8_t sn, sockopt_type sotype, void *arg)
 {
         // M20131220 : Remove warning
         //uint8_t tmp;
@@ -965,7 +951,7 @@ int8_t setsockopt(uint8_t sn, sockopt_type sotype, void *arg)
         return SOCK_OK;
 }
 
-int8_t getsockopt(uint8_t sn, sockopt_type sotype, void *arg)
+int8_t lan_getsockopt(uint8_t sn, sockopt_type sotype, void *arg)
 {
         CHECK_SOCKNUM();
         switch (sotype)

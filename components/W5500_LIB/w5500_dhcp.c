@@ -49,8 +49,8 @@
 //
 //*****************************************************************************
 
-#include "socket.h"
-#include "dhcp.h"
+#include "w5500_socket.h"
+#include "w5500_dhcp.h"
 
 /* If you want to display debug & processing message, Define _DHCP_DEBUG_ in dhcp.h */
 
@@ -425,7 +425,7 @@ void send_DHCP_DISCOVER(void)
         printf("> Send DHCP_DISCOVER\r\n");
 #endif
 
-        sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
+        lan_sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
 }
 
 /* SEND DHCP REQUEST */
@@ -524,7 +524,7 @@ void send_DHCP_REQUEST(void)
         printf("> Send DHCP_REQUEST\r\n");
 #endif
 
-        sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
+        lan_sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
 }
 
 /* SEND DHCP DHCPDECLINE */
@@ -585,7 +585,7 @@ void send_DHCP_DECLINE(void)
         printf("\r\n> Send DHCP_DECLINE\r\n");
 #endif
 
-        sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
+        lan_sendto(DHCP_SOCKET, (uint8_t *)pDHCPMSG, RIP_MSG_SIZE, ip, DHCP_SERVER_PORT);
 }
 
 /* PARSE REPLY pDHCPMSG */
@@ -602,7 +602,7 @@ int8_t parseDHCPMSG(void)
 
         if ((len = getSn_RX_RSR(DHCP_SOCKET)) > 0)
         {
-                len = recvfrom(DHCP_SOCKET, (uint8_t *)pDHCPMSG, len, svr_addr, &svr_port);
+                len = lan_recvfrom(DHCP_SOCKET, (uint8_t *)pDHCPMSG, len, svr_addr, &svr_port);
 #ifdef _DHCP_DEBUG_
                 printf("DHCP message : %d.%d.%d.%d(%d) %d received. \r\n", svr_addr[0], svr_addr[1], svr_addr[2], svr_addr[3], svr_port, len);
 #endif
@@ -702,7 +702,7 @@ uint8_t DHCP_run(void)
                 return DHCP_STOPPED;
 
         if (getSn_SR(DHCP_SOCKET) != SOCK_UDP)
-                socket(DHCP_SOCKET, Sn_MR_UDP, DHCP_CLIENT_PORT, 0x00);
+                lan_socket(DHCP_SOCKET, Sn_MR_UDP, DHCP_CLIENT_PORT, 0x00);
 
         ret = DHCP_RUNNING;
         type = parseDHCPMSG();
@@ -844,7 +844,7 @@ uint8_t DHCP_run(void)
 
 void DHCP_stop(void)
 {
-        close(DHCP_SOCKET);
+        lan_close(DHCP_SOCKET);
         dhcp_state = STATE_DHCP_STOP;
 }
 
@@ -918,7 +918,7 @@ int8_t check_DHCP_leasedIP(void)
 
         // IP conflict detection : ARP request - ARP reply
         // Broadcasting ARP Request for check the IP conflict using UDP sendto() function
-        ret = sendto(DHCP_SOCKET, (uint8_t *)"CHECK_IP_CONFLICT", 17, DHCP_allocated_ip, 5000);
+        ret = lan_sendto(DHCP_SOCKET, (uint8_t *)"CHECK_IP_CONFLICT", 17, DHCP_allocated_ip, 5000);
 
         // RCR value restore
         setRCR(tmp);

@@ -17,7 +17,7 @@
 #include "soc/gpio_struct.h"
 #include "driver/gpio.h"
 
-#include "w5500_spi.h"
+// #include "w5500_spi.h"
 #include "w5500_driver.h"
 #include "Led.h"
 
@@ -50,7 +50,6 @@ void app_main()
                 printf("  \n");
         }
         Led_Init();
-        spi_init();
-        // spi_test();
+
         w5500_user_int();
 }

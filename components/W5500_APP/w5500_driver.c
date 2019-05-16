@@ -25,11 +25,15 @@
 #include "wizchip_conf.h"
 #include "w5500_driver.h"
 
-#include "socket.h"
+#include "w5500_socket.h"
 
 #include "w5500_spi.h"
-#include "dhcp.h"
-#include "dns.h"
+#include "w5500_dhcp.h"
+#include "w5500_dns.h"
+// #include "Http.h"
+#include "Led.h"
+#include "user_mqtt.h"
+// #include "Smartconfig.h"
 
 // extern OsiSyncObj_t Spi_Mutex;   //Used for SPI Lock
 // extern OsiSyncObj_t cJSON_Mutex; //Used for cJSON Lock
@@ -41,19 +45,23 @@
 // extern OsiSyncObj_t xBinary7; //For Power Measure Task
 
 #define RJ45_DEBUG 1
-#define FAILURE 0
+#define FAILURE -1
 #define SUCCESS 1
 #define RJ45_STATUS_TIMEOUT 3
+#define W5500_DNS_FAIL -3
+#define NO_RJ45_ACCESS -4
+#define WEB_SERVER "api.ubibot.cn"
 
-uint32_t socker_port = 3000;
+uint32_t socker_port = 3000; //不可变
 uint8_t LAN_WEB_SERVER[16];
 uint8_t ethernet_buf[ETHERNET_DATA_BUF_SIZE];
 uint8_t dns_host_ip[4];
 uint8_t server_port = 80;
 uint8_t standby_dns[4] = {8, 8, 8, 8};
+uint8_t RJ45_STATUS;
+
 wiz_NetInfo gWIZNETINFO;
 wiz_NetInfo gWIZNETINFO_READ;
-extern char WEB_SERVER[64];
 extern char POST_REQUEST_URI[255];
 extern char Post_Data_Buffer[4096];
 extern volatile bool NET_DATA_POST;
@@ -66,61 +74,9 @@ extern void PostAddrChage(unsigned long data_num, unsigned long end_addr);    //
 uint8_t Ethernet_Timeout = 0; //ethernet http application time out
 uint8_t Ethernet_netSet_val = 0;
 uint8_t ethernet_http_mode = ACTIVE_DEVICE_MODE;
-static bool lan_EndFlag = 0;
-static uint16_t lan_read_data_num = 0;
-static uint16_t lan_post_data_sum = 0;
-static uint16_t lan_post_data_num = 0;
-static uint16_t lan_delete_data_num = 0;
-static unsigned long lan_post_data_len = 0;
-static unsigned long lan_read_data_end_addr = 0;
-static unsigned long lan_MemoryAddr = 0;
-static char lan_mac_buf[18] = {0};
 uint8_t Http_Buffer;
 
-struct HTTP_STA
-{
-        char GET[10];
-        char POST[10];
-        char HEART_BEAT[64];
-
-        char POST_URL1[64];
-        char POST_URL_METADATA[16];
-        char POST_URL_FIRMWARE[16];
-        char POST_URL_SSID[16];
-        char POST_URL_COMMAND_ID[16];
-
-        char WEB_URL1[50];
-        char WEB_URL2[20];
-        char WEB_URL3[20];
-
-        char HTTP_VERSION10[20];
-        char HTTP_VERSION11[20];
-
-        char HOST[30];
-        char USER_AHENT[40];
-        char CONTENT_LENGTH[30];
-        char ENTER[10];
-} http = {"GET ",
-          "POST ",
-          "http://api.ubibot.cn/heartbeat?api_key=",
-
-          "http://api.ubibot.cn/update.json?api_key=",
-          "&metadata=true",
-          "&firmware=",
-          "&ssid=",
-          "&command_id=",
-
-          "http://api.ubibot.cn/products/",
-          "/devices/",
-          "/activate",
-
-          " HTTP/1.0\r\n",
-          " HTTP/1.1\r\n",
-
-          "Host: api.ubibot.cn\r\n",
-          "User-Agent: dalian urban ILS1\r\n",
-          "Content-Length:",
-          "\r\n\r\n"};
+SemaphoreHandle_t xMutex_W5500_SPI;
 
 /*******************************************************************************
 // Reset w5500 chip with w5500 RST pin                                
@@ -130,7 +86,7 @@ void w5500_reset(void)
         gpio_set_level(PIN_NUM_W5500_REST, 0);
         vTaskDelay(10 / portTICK_RATE_MS);
         gpio_set_level(PIN_NUM_W5500_REST, 1);
-        vTaskDelay(2000 / portTICK_RATE_MS);
+        vTaskDelay(2000 / portTICK_RATE_MS); //时间不能再短
 }
 
 /*******************************************************************************
@@ -138,7 +94,7 @@ void w5500_reset(void)
 *******************************************************************************/
 void spi_cris_en(void)
 {
-        //osi_SyncObjWait(&Spi_Mutex, OSI_WAIT_FOREVER); //SPI Semaphore Take
+        xSemaphoreTake(xMutex_W5500_SPI, portMAX_DELAY); //SPI Semaphore Take
 }
 
 /*******************************************************************************
@@ -146,7 +102,7 @@ void spi_cris_en(void)
 *******************************************************************************/
 void spi_cris_ex(void)
 {
-        //////osi_SyncObjSignal(&Spi_Mutex); //SPI Semaphore Give
+        xSemaphoreGive(xMutex_W5500_SPI); //SPI Semaphore Give
 }
 
 /*******************************************************************************
@@ -207,20 +163,18 @@ void w5500_lib_init(void)
 *******************************************************************************/
 uint8_t check_rj45_status(void)
 {
-        uint8_t i;
 
-        for (i = 0; i < RJ45_STATUS_TIMEOUT; i++)
+        // for (i = 0; i < RJ45_STATUS_TIMEOUT; i++)
+
+        if (IINCHIP_READ(PHYCFGR) & 0x01)
         {
-                if (IINCHIP_READ(PHYCFGR) & 0x01)
-                {
-                        printf("RJ45 OK\n");
-                        return ESP_OK;
-                }
-                printf("RJ45 FAIL\n ");
-                vTaskDelay(500 / portTICK_RATE_MS);
+                // printf("RJ45 OK\n");
+                return ESP_OK;
         }
+        // printf("RJ45 FAIL\n ");
+        // vTaskDelay(1000 / portTICK_RATE_MS);
 
-        printf("RJ45 FAIL\n ");
+        // printf("RJ45 FAIL\n ");
         return ESP_FAIL;
 }
 
@@ -256,13 +210,13 @@ void my_ip_conflict(void)
 }
 
 /****************解析DNS*****************/
-uint8_t lan_dns_resolve(uint8_t *dns_buf)
+int8_t lan_dns_resolve(uint8_t *dns_buf)
 {
         //   osi_at24c08_ReadData(HOST_ADDR,(uint8_t*)WEB_SERVER,sizeof(WEB_SERVER),1);  //read the host name
 
         DNS_init(SOCK_DHCP, dns_buf);
 
-        if (DNS_run(gWIZNETINFO.dns, (uint8_t *)HOST_NAME, dns_host_ip) > 0)
+        if (DNS_run(gWIZNETINFO.dns, (uint8_t *)WEB_SERVER, dns_host_ip) > 0)
         {
 #ifdef RJ45_DEBUG
                 printf("host ip: %d.%d.%d.%d\r\n", dns_host_ip[0], dns_host_ip[1], dns_host_ip[2], dns_host_ip[3]);
@@ -301,7 +255,7 @@ void W5500_Network_Init(void)
         uint8_t txsize[MAX_SOCK_NUM] = {4, 2, 2, 2, 2, 2, 2, 0}; //socket 0,16K
         uint8_t rxsize[MAX_SOCK_NUM] = {4, 2, 2, 2, 2, 2, 2, 0}; //socket 0,16K
 
-        esp_read_mac(&mac, 3); //      获取芯片内部默认出厂MAC，
+        esp_read_mac(mac, 3); //      获取芯片内部默认出厂MAC，
 
         wizchip_init(txsize, rxsize);
 
@@ -387,113 +341,161 @@ void W5500_Network_Init(void)
                         default:
                                 break;
                         }
-
-                        // if (Ethernet_Timeout >= ETHERNET_HTTP_TIMEOUT)
-                        // {
-                        //         break;
-                        // }
                 }
         }
         printf("Network_init success!!!\n");
 }
 
-/*****************http发送****************/
-void http_send(void)
+int8_t lan_http_send(char *send_buff, uint16_t send_size, char *recv_buff, uint16_t recv_size)
 {
-
-        char build_http[256];
-        char recv_buf[1024];
-        sprintf(build_http, "%s%s%s%s%s%s%s", http.GET, http.WEB_URL1, "dc6719fd1120443a9e13916aaef07ef5", http.WEB_URL2, "SP10001", http.WEB_URL3, http.ENTER);
-        //http.HTTP_VERSION10, http.HOST, http.USER_AHENT, http.ENTER);
-
-        printf("build_http=%s\n", build_http);
+        int32_t ret = 0;
+        uint16_t size = 0;
 
         while (1)
         {
-                switch (getSn_SR(SOCK_DHCP))
+                printf("while ing !!!\n");
+                uint8_t temp;
+                switch (temp = getSn_SR(SOCK_DHCP))
                 {
                 case SOCK_INIT:
-                        printf("SOCK_INIT!!!\n");
-                        int8_t ret = connect(SOCK_DHCP, dns_host_ip, server_port);
-                        printf("%d\n", ret);
+                        // printf("SOCK_INIT!!!\n");
+                        ret = lan_connect(SOCK_DHCP, dns_host_ip, server_port);
+                        if (ret <= 0)
+                        {
+                                printf("INIT FAIL CODE : %d\n", ret);
+                                return ret;
+                        }
                         break;
+
                 case SOCK_ESTABLISHED:
                         if (getSn_IR(SOCK_DHCP) & Sn_IR_CON)
                         {
+                                // printf("SOCK_ESTABLISHED!!!\n");
                                 setSn_IR(SOCK_DHCP, Sn_IR_CON);
                         }
-                        // Http_Buffer = "http://api.ubibot.cn/products/产品号/devices/序列号/activate";
-                        printf("SOCK_ESTABLISHED!!!\n");
-                        send(SOCK_DHCP, (const uint8_t *)build_http, sizeof(build_http));
-                        vTaskDelay(500 / portTICK_RATE_MS);
-                        close(SOCK_DHCP);
+                        printf("send_buff   : %s, size :%d \n", (char *)send_buff, send_size);
+                        lan_send(SOCK_DHCP, (uint8_t *)send_buff, send_size);
+
+                        vTaskDelay(100 / portTICK_RATE_MS); //需要延时一段时间，等待平台返回数据
+
+                        size = getSn_RX_RSR(SOCK_DHCP);
+                        printf("recv_size = %d\n", size);
+                        if (size > 0)
+                        {
+                                if (size > ETHERNET_DATA_BUF_SIZE)
+                                {
+                                        size = ETHERNET_DATA_BUF_SIZE;
+                                }
+                                bzero((char *)recv_buff, recv_size); //写入之前清0
+                                ret = lan_recv(SOCK_DHCP, (uint8_t *)recv_buff, size);
+                                if (ret < 0)
+                                {
+                                        printf("w5500 recv failed! %d\n", ret);
+                                        return ret;
+                                        //break;
+                                }
+                                else
+                                {
+                                        //printf("w5500 recv  : %s\n", (char *)recv_buff);
+                                }
+                        }
+
+                        lan_close(SOCK_DHCP);
                         break;
 
                 case SOCK_CLOSE_WAIT:
                         printf("SOCK_CLOSE_WAIT!!!\n");
+
                         break;
 
                 case SOCK_CLOSED:
                         printf("Closed\r\n");
-                        socket(SOCK_DHCP, Sn_MR_TCP, socker_port++, 0x00);
+                        lan_socket(SOCK_DHCP, Sn_MR_TCP, socker_port, 0x00);
+                        if (ret > 0) //需要等到接收到数据才退出函数
+                                return ret;
+                        break;
 
-                        int32_t r = 0;
-                        r = recv(SOCK_DHCP, &recv_buf, sizeof(recv_buf));
-                        if (r > 0)
-                        {
-                                printf("接收到%d字节   recvdate = %s\n ", r, recv_buf);
-                        }
-                        else
-                        {
-                                printf("fail!!! code:%d\n", r);
-                        }
+                default:
+                        printf("send get %2x\n", temp);
+                        lan_close(SOCK_DHCP); //网线断开重联后会返回 0X22，自动进入UDP模式，所以需要关闭连接。
+                        break;
                 }
-                break;
-        default:
-                break;
+                vTaskDelay(100 / portTICK_RATE_MS);
         }
-
-        vTaskDelay(500 / portTICK_RATE_MS);
 }
+
+/*****************RJ45_CHECK****************/
+void RJ45_Check_Task(void *arg)
+{
+        uint8_t need_reinit = 0;
+        while (1)
+        {
+                if (check_rj45_status() == ESP_OK)
+                {
+                        if (need_reinit == 1)
+                        {
+                                W5500_Network_Init();
+                        }
+                        need_reinit = 0;
+                        RJ45_STATUS = RJ45_CONNECTED; //需要放在最后，等待重新初始化完成
+                        Led_Status = LED_STA_WORK;    //联网工作
+                        // xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
+                }
+                else
+                {
+                        RJ45_STATUS = RJ45_DISCONNECT;
+                        if (need_reinit == 0)
+                        {
+                                printf("网线连接断开！\n"); //只打印一次
+                        }
+                        need_reinit = 1;
+                }
+                vTaskDelay(100 / portTICK_RATE_MS);
+        }
 }
 
 /*******************有线网初始化*******************/
-void w5500_user_int(void)
+int8_t w5500_user_int(void)
 {
-        gpio_config_t io_conf;
+        w5500_spi_init();
+        user_mqtt_init();
 
-        //disable interrupt
+        gpio_config_t io_conf;
         io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-        //set as output mode
         io_conf.mode = GPIO_MODE_OUTPUT;
-        //bit mask of the pins that you want to set,e.g.GPIO16
         io_conf.pin_bit_mask = (1 << PIN_NUM_W5500_REST);
-        //disable pull-down mode
         io_conf.pull_down_en = 0;
-        //disable pull-up mode
         io_conf.pull_up_en = 1;
-        //configure GPIO with the given settings
         gpio_config(&io_conf);
         io_conf.pin_bit_mask = (1 << PIN_NUM_W5500_INT);
         gpio_config(&io_conf);
+
+        xMutex_W5500_SPI = xSemaphoreCreateMutex(); //创建W5500 SPI 发送互斥信号
 
         w5500_reset();
         w5500_lib_init();
 
         // printf(" VERSIONR_ID: %02x\n", IINCHIP_READ(VERSIONR));
-        esp_err_t ret;
+        int8_t ret;
         ret = check_rj45_status();
-        if (ret == ESP_OK)
+        if (ret != ESP_OK)
         {
-                W5500_Network_Init();
-                ret = lan_dns_resolve(ethernet_buf);
-                if (ret == SUCCESS)
-                {
-                        printf("DNS_SUCCESS!!!\n");
-                        http_send();
-                        // xTaskCreate(http_send, "http_send", 8192, NULL, 2, NULL);
-                }
+                printf("未检测到网线接入!\n");
+                return NO_RJ45_ACCESS;
         }
+        printf("网线接入!\n");
+        W5500_Network_Init();
+        ret = lan_dns_resolve(ethernet_buf);
+        if (ret != SUCCESS)
+        {
+                printf("初始化DNS解析失败!\n");
+                return W5500_DNS_FAIL;
+        }
+        printf("DNS_SUCCESS!!!\n");
+        RJ45_STATUS = RJ45_CONNECTED;
+        // xTaskCreate(RJ45_Check_Task, "lan_http_send_task", 8192, NULL, 1, NULL); //创建任务，不断检查RJ45连接状态
+        xTaskCreate(user_mqtt_task, "user_mqtt_task", 16384, NULL, 2, NULL); //创建任务，不断检查RJ45连接状态
+        return SUCCESS;
 }
 
 /*******************************************************************************
